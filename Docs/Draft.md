@@ -1,99 +1,102 @@
 # Parnassus Launcher Draft
 
-## Launcher
+## Launch Process
 
 ```mermaid
----
-title: Launch Process
----
 stateDiagram-v2
-    state CheckModsListDirectory <<choice>>
-    state CheckBlacklistDirectory <<choice>>
-    state CheckModsDirectory <<choice>>
-    [*] --> ReadModsList
-    ReadModsList --> CheckModsListDirectory
-    CheckModsListDirectory --> ReadBlacklists: if not DirectoryNotFound
-    CheckModsListDirectory --> CreateEmptyModsList: if DirectoryNotFound
-    CreateEmptyModsList --> ReadBlacklists
-    ReadBlacklists --> CheckBlacklistDirectory
-    CheckBlacklistDirectory --> ScanModsDirectory: if not DirectoryNotFound
-    CheckBlacklistDirectory --> CreateBlacklistDirectory: if DirectoryNotFound
-    CreateBlacklistDirectory --> CopyModsListAsDefaultBlacklist
-    CopyModsListAsDefaultBlacklist --> ScanModsDirectory
-    ScanModsDirectory --> CheckModsDirectory
-    CheckModsDirectory --> ModsDirectoryNotFoundException: if DirectoryNotFound
-    ModsDirectoryNotFoundException --> [*]
-    CheckModsDirectory --> UpdateModsList: if not DirectoryNotFound
-    CheckModsDirectory --> CleanExpiredBlacklistItems: if not DirectoryNotFound
-    CheckModsDirectory --> SupplementNewItemsToBlacklists: if not DirectoryNotFound
-    UpdateModsList --> UserSelectProfile
-    CleanExpiredBlacklistItems --> UserSelectProfile
-    SupplementNewItemsToBlacklists --> UserSelectProfile
+    [*] --> LoadModsList
+    LoadModsList --> CreateEmptyModsList: DirectoryNotFound
+    LoadModsList --> SyncLatestLaunchedBlacklist: Success
+    CreateEmptyModsList --> SyncLatestLaunchedBlacklist
+    
+    SyncLatestLaunchedBlacklist --> LoadBlacklistObjects
+    LoadBlacklistObjects --> CreateBlacklistDirectory: DirectoryNotFound
+    CreateBlacklistDirectory --> ScanMods
+    LoadBlacklistObjects --> ScanMods: Success
+    
+    ScanMods --> InternalError: DirectoryNotFound
+    ScanMods --> RestoreDefaultProfiles: Success
+    
+    state RestoreDefaultProfiles {
+        [*] --> CheckVanilla
+        CheckVanilla --> CheckAll
+        CheckAll --> [*]
+    }
+    
+    RestoreDefaultProfiles --> RepairBlacklists
+    RepairBlacklists --> WriteToDisk: Save Cleaned Data
+    WriteToDisk --> UserSelectProfile: HandleUserSelection
+    
     UserSelectProfile --> WriteIntoActualBlacklist
-    WriteIntoActualBlacklist --> Launch
-    Launch --> [*]
+    WriteIntoActualBlacklist --> RecordLaunchedProfile: SyncManager.Record
+    RecordLaunchedProfile --> LaunchProcess: Process.Start
+    LaunchProcess --> ShowEnabledMods: Countdown 10s
+    ShowEnabledMods --> [*]
 ```
 
-### Launcher Data Structures
-
-* Game
+## Launcher UML
 
 ```mermaid
----
-title: Parnassus.Launcher
----
 classDiagram
-    class Game {
-        - launchCommand : string
-        - blacklist : Blacklist
-        + Game(string _command)
-        + Apply(Blacklist _list) void
-        + Launch() void
-    }
-
     class Blacklist {
-        - content : Dictionary
+        - content : Dictionary<string, bool>?
         - name : string
-        - description : string
-        + Blacklist(Dictionary _content, string _name, string _description)
-        + GetContent() Dictionary
-        + GetName() string
-        + GetDescription() string
-        + ToString() string*
+        + Content : Dictionary<string, bool>? (Property)
+        + Name : string (Property)
+        + Blacklist(Dictionary _content, string _name)
+        + ToString() string
     }
 
     class BlacklistManager {
         - blacklistsDir : string
-        - blacklists : Dictionary
-        + BlacklistManager(string _blacklistsDir)
-        + GetBlacklistsDictionary() Dictionary
-        + GetBlacklistByName(string _name) Blacklist
+        - blacklists : Dictionary<string, Blacklist?>
+        + Blacklists : Dictionary<string, Blacklist?> (Property)
+        + GetBlacklistByName(string _name) Blacklist?
         + LoadBlacklistObjects() void
-        + WriteToDisk() void
         + RepairBlacklists(ModsList _modsList) void
-        - AddMissingMods(ModsList _modsList) void
-        - RemoveDeletedMods(ModsList _modsList) void
+        + CreateBlacklist(Dictionary _content, string _name, string? _templateName = null) int
+        + DeleteBlacklist(string _name) int
+        + RenameBlacklist(string _name, string _newName) int
+        + WriteToDisk() void
     }
 
     class ModsList {
-        - content : List
+        - content : List<string>?
+        + Content : List<string>? (Property)
         + ModsList(List _content)
-        + GetContent() List
-        + ToString() string*
+        + ToString() string
     }
 
     class ModsListManager {
         - modsListDir : string
-        - modsDir: string
+        - modsDir : string
         - modsList : ModsList
-        + ModsListManager(string _modsListDir, string _modsDir)
-        + GetModsList() ModsList
+        + ModsList : ModsList (Property)
         + LoadModsList() void
+        + ScanMods() void
         + WriteToDisk() void
     }
 
-    BlacklistManager --> Blacklist
-    BlacklistManager --> ModsList
-    ModsListManager --> ModsList
-    Game --> Blacklist
+    class SyncManager {
+        - configDir : string
+        - actualBlacklistDir : string
+        - blacklistsDir : string
+        + Record(string profileName) void
+        + SyncLatestLaunchedBlacklist() int
+    }
+
+    class LaunchManager {
+        - game : Game
+        - blacklistMan : BlacklistManager
+        - modsListMan : ModsListManager
+        - syncMan : SyncManager
+        + Execute() string?
+        - HandleUserSelection() string
+    }
+
+    BlacklistManager "1" --> "*" Blacklist
+    ModsListManager "1" --> "1" ModsList
+    LaunchManager --> BlacklistManager
+    LaunchManager --> ModsListManager
+    LaunchManager --> SyncManager
 ```

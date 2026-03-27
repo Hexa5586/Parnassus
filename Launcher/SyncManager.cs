@@ -60,7 +60,10 @@ public class SyncManager
             }
 
             string targetProfilePath = Path.Combine(blacklistsDir, $"{lastProfile}.txt");
-
+            if (!File.Exists(targetProfilePath))
+            {
+                return -1;
+            }
             File.Copy(actualBlacklistDir, targetProfilePath, true);
             return 0;
         }

@@ -21,7 +21,6 @@ public class LaunchManager
     private readonly string actualBlacklistDir; // The directory of the blacklist applied to Everest. (Mods/blacklist.txt)
     private readonly string configDir;  // The path of Parnassus's configurations and runtime data. (Parnassus/config.json)
 
-    private Game game;
     private BlacklistManager blacklistMan;
     private ModsListManager modsListMan;
     private SyncManager syncMan;
@@ -57,7 +56,6 @@ public class LaunchManager
         actualBlacklistDir = _actualBlacklistDir;
         configDir = _configDir;
 
-        game = new Game();
         blacklistMan = new BlacklistManager(blacklistsDir);
         modsListMan = new ModsListManager(modsListDir, modsDir);
         syncMan = new SyncManager(configDir, actualBlacklistDir, blacklistsDir);
@@ -78,11 +76,13 @@ public class LaunchManager
 
         var version = Assembly.GetEntryAssembly()?
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
-            .InformationalVersion;
+            .InformationalVersion
+            .Split("+")[0];
 
         while (true)
         {
-            var choices = blacklistMan.Blacklists.Keys.ToList();
+            var mainChoices = blacklistMan.Blacklists.Keys.ToList();
+            mainChoices.Sort();
 
             AnsiConsole.Clear();
             var panel = new Panel($"[white on CornflowerBlue]{logo}[/]")
@@ -95,7 +95,7 @@ public class LaunchManager
             AnsiConsole.Write("\n");
 
             var selectPrompt = new SelectionPrompt<string>()
-                .AddChoices(choices)
+                .AddChoices(mainChoices)
                 .PageSize(10)
                 .AddChoiceGroup("", new[] { createProfileItem, deleteProfileItem, renameProfileItem })
                 .UseConverter(name => name switch
@@ -140,11 +140,33 @@ public class LaunchManager
     /// </summary>
     private void HandleCreateProfile()
     {
-        var name = AnsiConsole.Ask<string>("Enter new profile name [grey](Enter '~' to cancel)[/]: ");
+        var name = AnsiConsole.Ask<string>("[green]Enter new profile name[/] [grey](Enter '~' to cancel)[/]: ");
         if (name.Trim() == "~") return;
 
         var content = modsListMan.ModsList.Content?.ToDictionary(x => x, _ => true);
-        if (blacklistMan.CreateBlacklist(content, name) == 0)
+
+        var templateChoices = blacklistMan.Blacklists.Keys.ToList();
+        if (templateChoices.Count == 0) return;
+        templateChoices.Sort();
+
+        const string cancelItem = "Cancel";
+
+        var templatePrompt = new SelectionPrompt<string>()
+            .Title("[green]Select a profile as TEMPLATE:[/]")
+            .AddChoices(templateChoices)
+            .AddChoiceGroup("", new[] { cancelItem })
+            .UseConverter(name => name switch
+            {
+                cancelItem => $"[grey]{cancelItem}[/]",
+                _ => name
+            })
+            .WrapAround();
+
+        templatePrompt.HighlightStyle = new Style(foreground: Color.White, background: Color.Blue);
+        var selectedTemplate = AnsiConsole.Prompt(templatePrompt);
+        if (selectedTemplate == cancelItem) return;
+
+        if (blacklistMan.CreateBlacklist(content, name, selectedTemplate) == 0)
         {
             blacklistMan.WriteToDisk();
             AnsiConsole.MarkupLine($"[green]Success:[/] Profile '{name}' created.");
@@ -162,14 +184,15 @@ public class LaunchManager
     /// </summary>
     private void HandleDeleteProfile()
     {
-        var choices = blacklistMan.Blacklists.Keys.ToList();
-        if (choices.Count == 0) return;
+        var deleteChoices = blacklistMan.Blacklists.Keys.ToList();
+        if (deleteChoices.Count == 0) return;
+        deleteChoices.Sort();
 
         const string cancelItem = "Cancel";
 
         var deletePrompt = new SelectionPrompt<string>()
             .Title("[red]Select a profile to DELETE:[/]")
-            .AddChoices(choices)
+            .AddChoices(deleteChoices)
             .AddChoiceGroup("", new[] { cancelItem })
             .UseConverter(name => name switch
             {
@@ -197,16 +220,16 @@ public class LaunchManager
     /// </summary>
     private void HandleRenameProfile()
     {
-        var choices = blacklistMan.Blacklists.Keys.ToList();
+        var renameChoices = blacklistMan.Blacklists.Keys.ToList();
         
-        if (choices.Count == 0) return;
-        choices.Sort();
+        if (renameChoices.Count == 0) return;
+        renameChoices.Sort();
 
         const string cancelItem = "Cancel";
 
         var renamePrompt = new SelectionPrompt<string>()
             .Title("[yellow]Select a profile to RENAME:[/]")
-            .AddChoices(choices)
+            .AddChoices(renameChoices)
             .AddChoiceGroup("", new[] { cancelItem })
             .UseConverter(name => name switch
             {
@@ -290,19 +313,14 @@ public class LaunchManager
 
         // RestoreDefaultProfiles
         blacklistMan.LoadBlacklistObjects();
-        if (!blacklistMan.Blacklists.ContainsKey("__vanilla__"))
-        {
-            blacklistMan.CreateBlacklist(modsListMan.ModsList.Content?.ToDictionary(x => x, _ => true), "__vanilla__");
-            blacklistMan.WriteToDisk();
-            blacklistMan.LoadBlacklistObjects();
-        }
+        
+        blacklistMan.CreateBlacklist(modsListMan.ModsList.Content?.ToDictionary(x => x, _ => true), "__vanilla__");
+        blacklistMan.WriteToDisk();
+        blacklistMan.LoadBlacklistObjects();
 
-        if (!blacklistMan.Blacklists.ContainsKey("__all__"))
-        {
-            blacklistMan.CreateBlacklist(modsListMan.ModsList.Content?.ToDictionary(x => x, _ => false), "__all__");
-            blacklistMan.WriteToDisk();
-            blacklistMan.LoadBlacklistObjects();
-        }
+        blacklistMan.CreateBlacklist(modsListMan.ModsList.Content?.ToDictionary(x => x, _ => false), "__all__");
+        blacklistMan.WriteToDisk();
+        blacklistMan.LoadBlacklistObjects();
 
         // RepairBlacklists
         blacklistMan.RepairBlacklists(modsListMan.ModsList);

@@ -159,15 +159,18 @@ public class BlacklistManager
     }
 
     /// <summary>
-    /// Create a new blacklist and add it to the dictionary.
+    /// Create a new blacklist from a template and add it to the dictionary.
     /// </summary>
     /// <param name="_content">The content of the blacklist</param>
     /// <param name="_name">The name for the new blacklist</param>
+    /// /// <param name="_templateName">The name of the template</param>
     /// <returns>
-    /// -1: Creation failed: content is null or the blacklist with the given name already exists.
+    /// -3: Creation failed: template is null;
+    /// -2: Creation failed: template not found, or use itself as template;
+    /// -1: Creation failed: content is null or the blacklist with the given name already exists;
     /// 0: Creation success.
     /// </returns>
-    public int CreateBlacklist(Dictionary<string, bool>? _content, string _name)
+    public int CreateBlacklist(Dictionary<string, bool>? _content, string _name, string? _templateName = null)
     {
         if (_content == null)
         {
@@ -177,7 +180,31 @@ public class BlacklistManager
         {
             return -1;
         }
-        blacklists[_name] = new Blacklist(_content, _name);
+
+        Dictionary<string, bool> result;
+
+        if (_templateName != null)
+        {
+            if (!blacklists.ContainsKey(_templateName) || _name == _templateName)
+            {
+                return -2;
+            }
+
+            var templateContent = blacklists[_templateName]?.Content;
+            if (templateContent == null)
+            {
+                return -3;
+            }
+            result = templateContent
+                .UnionBy(_content, x => x.Key)
+                .ToDictionary(x => x.Key, x => x.Value);
+        }
+        else
+        {
+            result = new(_content);
+        }
+        
+        blacklists[_name] = new Blacklist(result, _name);
         return 0;
     }
 
