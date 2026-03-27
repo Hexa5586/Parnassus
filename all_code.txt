@@ -1,0 +1,983 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace Parnassus.Launcher;
+
+public class Blacklist
+{
+    private Dictionary<string, bool>? content;
+    private string name;
+    private string description;
+
+    public Blacklist(Dictionary<string, bool>? _content = null, 
+        string _name = "", string _description = "")
+    {
+        this.content = _content;
+        this.name = _name;
+        this.description = _description;
+    }
+
+    public Blacklist(Blacklist? _list)
+    {
+        if (_list == null)
+        {
+            this.content = new Dictionary<string, bool>();
+            this.name = this.description = string.Empty;
+            return;
+        }
+
+        this.content = _list.content;
+        this.name = _list.name;
+        this.description = _list.description;
+    }
+
+    public Dictionary<string, bool>? Content { 
+        get => (content == null ? null : new(content));
+    }
+
+    public string Name { get => name; }
+    public string Description { get => description; }
+
+    public override string ToString()
+    {
+        if (content == null || content.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var head = $"# [Description]{description}\n";
+        var body = string.Join(Environment.NewLine, content
+            .Select(item => { 
+                if (item.Value)
+                {
+                    return item.Key;
+                }
+                else
+                {
+                    return $"# {item.Key}";
+                }
+            }));
+        return head + body;
+    }
+
+}
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace Parnassus.Launcher;
+
+public class BlacklistManager
+{
+    private readonly string blacklistsDir;
+    private Dictionary<string, Blacklist?> blacklists;
+
+    public BlacklistManager(string _blacklistsDir)
+    {
+        blacklistsDir = _blacklistsDir;
+        blacklists = new Dictionary<string, Blacklist?>();
+    }
+
+    public Dictionary<string, Blacklist?> Blacklists
+    {
+        get => new Dictionary<string, Blacklist?>(blacklists);
+    }
+
+    public Blacklist? GetBlacklistByName(string _name)
+    {
+        return blacklists.TryGetValue(_name, out var result) ? result : null;
+    }
+
+    public void LoadBlacklistObjects()
+    {
+        var blacklistsPaths = Directory.GetFiles(blacklistsDir, "*.txt", SearchOption.TopDirectoryOnly);
+        foreach (var path in blacklistsPaths)
+        {
+            string name = Path.GetFileNameWithoutExtension(path);
+            string description = string.Empty;
+            var modItems = new Dictionary<string, bool>();
+            
+            var lines = File.ReadAllLines(path);
+            foreach (var line in lines)
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                var curLine = line.Trim();
+                bool blocked = true;
+
+                if (curLine.StartsWith("#"))
+                {
+                    blocked = false;
+                    curLine = curLine.Substring(1).TrimStart();
+                }
+
+                if (curLine.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                {
+                    modItems[curLine] = blocked;
+                }
+                else if (curLine.StartsWith("[Description]"))
+                {
+                    curLine = curLine.Substring("[Description]".Length).TrimStart();
+                    description = curLine;
+                }
+            }
+
+            Blacklist blacklistObj = new Blacklist(modItems, name, description);
+            blacklists[name] = blacklistObj;
+        }
+    }
+
+    public void RepairBlacklists(ModsList _modsList)
+    {
+        if (blacklists == null || blacklists.Count == 0)
+        {
+            return;
+        }
+        RemoveDeletedMods(_modsList);
+        AddMissingMods(_modsList);
+    }
+
+    private void RemoveDeletedMods(ModsList _modsList)
+    {
+        if (_modsList.Content == null)
+        {
+            return;
+        }
+        var modsHashSet = _modsList.Content.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var keys = blacklists.Keys.ToList();
+        foreach (var name in keys)
+        {
+            var blacklist = blacklists[name];
+            if (blacklist == null)
+            {
+                continue;
+            }
+
+            var content = blacklist.Content;
+            if (content == null)
+            {
+                continue;
+            }
+            
+            content = content.Where(x => modsHashSet.Contains(x.Key))
+                .ToDictionary(x => x.Key, x => x.Value);
+            Blacklist newList = new Blacklist(content, name, blacklist.Description);
+            blacklists[name] = newList;
+        }
+    }
+
+    private void AddMissingMods(ModsList _modsList)
+    {
+        if (_modsList.Content == null)
+        {
+            return;
+        }
+        var modsHashSet = _modsList.Content.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var keys = blacklists.Keys.ToList();
+        foreach (var name in keys)
+        {
+            var blacklist = blacklists[name];
+            if (blacklist == null)
+            {
+                continue;
+            }
+
+            var content = blacklist.Content;
+            
+            if (content == null)
+            {
+                continue;
+            }
+
+            var keysHashSet = content.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var newItems = modsHashSet.Where(x => !keysHashSet.Contains(x))
+                .ToDictionary(key => key, _ => false);
+            if (newItems.Count == 0)
+            {
+                continue;
+            }
+
+            content = content.Union(newItems).ToDictionary(x => x.Key, x => x.Value);
+            Blacklist newList = new Blacklist(content, name, blacklist.Description);
+            blacklists[name] = newList;
+        }
+    }
+
+    public int CreateBlacklist(Dictionary<string, bool>? _content, string _name, string _description)
+    {
+        if (_content == null)
+        {
+            return -1;
+        }
+        if (blacklists.ContainsKey(_name))
+        {
+            return -1;
+        }
+        blacklists[_name] = new Blacklist(_content, _name, _description);
+        return 0;
+    }
+
+    public int DeleteBlacklist(string _name)
+    {
+        if (!blacklists.ContainsKey(_name) || blacklists[_name] == null)
+        {
+            return -1;
+        }
+        blacklists[_name] = null;
+        return 0;
+    }
+
+    public int RenameBlacklist(string _name, string _newName)
+    {
+        if (!blacklists.ContainsKey(_name) || blacklists[_name] == null)
+        {
+            return -1;
+        }
+
+        if (blacklists.ContainsKey(_newName))
+        {
+            return -2;
+        }
+
+        blacklists[_newName] = new Blacklist(blacklists[_name]);
+        blacklists[_name] = null;
+        return 0;
+    }
+
+    public void WriteToDisk()
+    {
+        var keys = blacklists.Keys.ToList();
+        
+        foreach (var key in keys)
+        {
+            var item = blacklists[key];
+            var filename = Path.Combine(blacklistsDir, $"{key}.txt");
+
+            if (item == null)
+            {
+                if (File.Exists(filename))
+                {
+                    File.Delete(filename);
+                }
+                blacklists.Remove(key);
+                continue;
+            }
+            File.WriteAllText(filename, item.ToString());
+        }
+    }
+}
+﻿using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Text;
+
+namespace Parnassus.Launcher;
+
+public class Game
+{
+    private Blacklist profile;
+
+    public Game()
+    {
+        this.profile = new Blacklist();
+    }
+
+    public Blacklist Profile
+    {
+        get => new Blacklist(this.profile);
+        set => this.profile = new Blacklist(value);
+    }
+}
+﻿using Spectre.Console;
+using System;
+using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Diagnostics;
+using System.Text;
+using System.Xml.Linq;
+
+namespace Parnassus.Launcher;
+
+public class LaunchManager
+{
+    private readonly string launchCommand;
+    private readonly string blacklistsDir;
+    private readonly string modsListDir;
+    private readonly string modsDir;
+    private readonly string actualBlacklistDir;
+    private readonly string configDir;
+
+    private Game game;
+    private BlacklistManager blacklistMan;
+    private ModsListManager modsListMan;
+    private SyncManager syncMan;
+
+    private string logo = """
+                         @@@                 
+                        @@@@@                
+                       @@@@@@@               
+                      @@@@@@@@               
+                     @@@@@@@@@@@@            
+                   @@@@@@@@@@@@@@@@          
+                  @@@@@@=-=@@@@@@@@@         
+                @@@@@@@.......*@@@@@@        
+            @@@@@@@@:...........*@@@@@@@@    
+           @@@@@@@@@+...........-@@@@@@@@@   
+         @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@  
+        @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+        """;
+
+    public LaunchManager(string _command, 
+                        string _blacklistsDir, 
+                        string _modsListDir, 
+                        string _modsDir, 
+                        string _actualBlacklistDir,
+                        string _configDir)
+    {
+        launchCommand = _command;
+        blacklistsDir = _blacklistsDir;
+        modsListDir = _modsListDir;
+        modsDir = _modsDir;
+        actualBlacklistDir = _actualBlacklistDir;
+        configDir = _configDir;
+
+        game = new Game();
+        blacklistMan = new BlacklistManager(blacklistsDir);
+        modsListMan = new ModsListManager(modsListDir, modsDir);
+        syncMan = new SyncManager(configDir, actualBlacklistDir, blacklistsDir);
+    }
+
+    private string UserSelection()
+    {
+        const string separatorItem = "";
+        const string createProfileItem = "CREATE PROFILE...";
+        const string deleteProfileItem = "DELETE PROFILE...";
+        const string renameProfileItem = "RENAME PROFILE...";
+
+        string selectedName;
+
+        while (true)
+        {
+            var choices = blacklistMan.Blacklists.Keys.ToList();
+
+            AnsiConsole.Clear();
+            var panel = new Panel($"[blue]{logo}[/]")
+                .Header("")
+                .Border(BoxBorder.Rounded)
+                .BorderColor(Color.Grey);
+
+            AnsiConsole.Write(Align.Center(panel));
+            AnsiConsole.Write("\n\n");
+            AnsiConsole.Write(new Rule("[yellow] PARNASSUS LAUNCHER [/]").RuleStyle("grey"));
+            AnsiConsole.Write("\n");
+
+            var selectPrompt = new SelectionPrompt<string>()
+                .AddChoices(choices)
+                .PageSize(10)
+                .AddChoiceGroup("", new[] { createProfileItem, deleteProfileItem, renameProfileItem })
+                .UseConverter(name => name switch
+                {
+                    createProfileItem => $"[grey]{createProfileItem}[/]",
+                    deleteProfileItem => $"[grey]{deleteProfileItem}[/]",
+                    renameProfileItem => $"[grey]{renameProfileItem}[/]",
+                    _ => name
+                });
+
+            selectPrompt.HighlightStyle = new Style(foreground: Color.White, background: Color.Blue);
+
+            selectedName = AnsiConsole.Prompt(selectPrompt);
+
+            if (selectedName == separatorItem)
+            {
+                continue;
+            }
+            else if (selectedName == createProfileItem)
+            {
+                HandleCreateProfile();
+                continue;
+            }
+            else if (selectedName == deleteProfileItem)
+            {
+                HandleDeleteProfile();
+                continue;
+            }
+            else if (selectedName == renameProfileItem)
+            {
+                HandleRenameProfile();
+                continue;
+            }
+            
+            return selectedName;
+        }
+    }
+
+    private void HandleCreateProfile()
+    {
+        var name = AnsiConsole.Ask<string>("Enter new profile name [grey](Enter '~' to cancel)[/]: ");
+        if (name.Trim() == "~") return;
+
+        var content = modsListMan.ModsList.Content?.ToDictionary(x => x, _ => true);
+        if (blacklistMan.CreateBlacklist(content, name, "User created profile") == 0)
+        {
+            blacklistMan.WriteToDisk();
+            AnsiConsole.MarkupLine($"[green]Success:[/] Profile '{name}' created.");
+            AnsiConsole.Ask<string>("[grey]Press ENTER to continue...[/]", "");
+        }
+        else
+        {
+            AnsiConsole.MarkupLine($"[red]Error:[/] Profile '{name}' already exists.");
+            AnsiConsole.Ask<string>("[grey]Press ENTER to continue...[/]", "");
+        }
+    }
+
+    private void HandleDeleteProfile()
+    {
+        var choices = blacklistMan.Blacklists.Keys.ToList();
+        if (choices.Count == 0) return;
+
+        const string cancelItem = "Cancel";
+
+        var deletePrompt = new SelectionPrompt<string>()
+            .Title("[red]Select a profile to DELETE:[/]")
+            .AddChoices(choices)
+            .AddChoiceGroup("", new[] { cancelItem })
+            .UseConverter(name => name switch
+            {
+                cancelItem => $"[grey]{cancelItem}[/]",
+                _ => name
+            });
+
+        deletePrompt.HighlightStyle = new Style(foreground: Color.White, background: Color.Red);
+        var toDelete = AnsiConsole.Prompt(deletePrompt);
+
+        if (toDelete == cancelItem) return;
+
+        if (AnsiConsole.Confirm($"[red]Are you sure you want to delete '{toDelete}'?[/]"))
+        {
+            blacklistMan.DeleteBlacklist(toDelete);
+            blacklistMan.WriteToDisk();
+            AnsiConsole.MarkupLine($"[grey]Profile '{toDelete}' deleted.[/]");
+            AnsiConsole.Ask<string>("[grey]Press ENTER to continue...[/]", "");
+        }
+    }
+
+    private void HandleRenameProfile()
+    {
+        var choices = blacklistMan.Blacklists.Keys.ToList();
+        
+        if (choices.Count == 0) return;
+        choices.Sort();
+
+        const string cancelItem = "Cancel";
+
+        var renamePrompt = new SelectionPrompt<string>()
+            .Title("[yellow]Select a profile to RENAME:[/]")
+            .AddChoices(choices)
+            .AddChoiceGroup("", new[] { cancelItem })
+            .UseConverter(name => name switch
+            {
+                cancelItem => $"[grey]{cancelItem}[/]",
+                _ => name
+            });
+
+        renamePrompt.HighlightStyle = new Style(foreground: Color.White, background: Color.Blue);
+
+        var toRename = AnsiConsole.Prompt(renamePrompt);
+        if (toRename == cancelItem) return;
+
+        var newName = AnsiConsole.Ask<string>($"[yellow]Rename profile '{toRename}' to [/][grey](Enter '~' to cancel)[/]: ");
+        if (newName.Trim() == "~") return;
+
+        var resp = blacklistMan.RenameBlacklist(toRename, newName);
+        if (resp == 0)
+        {
+            blacklistMan.WriteToDisk();
+            AnsiConsole.MarkupLine($"[green]Success:[/] Profile '{toRename}' renamed to '{newName}'.");
+            AnsiConsole.Ask<string>("[grey]Press ENTER to continue...[/]", "");
+        }
+        else if (resp == -1)
+        {
+            AnsiConsole.MarkupLine($"[red]Error:[/] Profile '{toRename}' not found.");
+            AnsiConsole.Ask<string>("[grey]Press ENTER to continue...[/]", "");
+        }
+        else if (resp == -2)
+        {
+            AnsiConsole.MarkupLine($"[red]Error:[/] Profile name '{newName}' already exists.");
+            AnsiConsole.Ask<string>("[grey]Press ENTER to continue...[/]", "");
+        }
+    }
+
+    public string? Launch()
+    {
+        // ReadModsList
+        try
+        {
+            modsListMan.LoadModsList();
+        }
+        catch (DirectoryNotFoundException)
+        {
+            // CreateEmptyModsList
+            Directory.CreateDirectory(Path.GetDirectoryName(modsListDir) ?? string.Empty);
+            File.Create(modsListDir).Close();
+            modsListMan.LoadModsList();
+        }
+
+        // SyncLatestLaunchedBlacklist
+        syncMan.SyncLatestLaunchedBlacklist();
+
+        // ReadBlacklists
+        try
+        {
+            blacklistMan.LoadBlacklistObjects();
+        }
+        catch (DirectoryNotFoundException)
+        {
+            // CreateBlacklistDirectory
+            Directory.CreateDirectory(blacklistsDir);
+        }
+
+        // ScanModsDirectory
+        try
+        {
+            modsListMan.ScanMods();
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return "InternalError: Mod directory not found.";
+        }
+
+        blacklistMan.LoadBlacklistObjects();
+        if (blacklistMan.Blacklists.Count == 0)
+        {
+            // CopyModsListAsDefaultBlacklist
+            blacklistMan.CreateBlacklist(modsListMan.ModsList.Content?.ToDictionary(x => x, _ => true),
+                "__vanilla__", "Turn off all mods as default.");
+            blacklistMan.WriteToDisk();
+            blacklistMan.LoadBlacklistObjects();
+        }
+
+        // RepairBlacklists
+        blacklistMan.RepairBlacklists(modsListMan.ModsList);
+        // WriteListsToDisk
+        modsListMan.WriteToDisk();
+        blacklistMan.WriteToDisk();
+
+        // UserSelectProfile
+        
+        var selectedName = UserSelection();
+
+        // WriteIntoActualBlacklist
+        File.WriteAllText(actualBlacklistDir,
+            blacklistMan.Blacklists[selectedName]?.ToString());
+
+        // RecordLaunchedProfile
+        syncMan.Record(selectedName);
+
+        // Launch
+        if (string.IsNullOrEmpty(launchCommand))
+        {
+            return "InternalError: Empty launch command is not allowed.";
+        }
+        
+        ProcessStartInfo startInfo = new ProcessStartInfo
+        {
+            FileName = launchCommand,
+            Arguments = "",
+            UseShellExecute = true,
+            CreateNoWindow = false,
+            WorkingDirectory = Path.GetDirectoryName(launchCommand)
+        };
+
+        try
+        {
+            Process.Start(startInfo);
+        }
+        catch (Exception ex)
+        {
+            return $"InternalError: {ex.Message}";
+        }
+
+        var enabledMods = blacklistMan.Blacklists[selectedName]?.Content?
+            .Where(x => !x.Value)
+            .ToDictionary(x => x.Key, x => x.Value)
+            .Keys.ToList();
+
+        if (enabledMods == null || enabledMods.Count == 0)
+        {
+            enabledMods = new List<string> { "<Vanilla>" };
+        }
+
+        var enabledModsOutput = string.Join(Environment.NewLine,
+            enabledMods);
+        AnsiConsole.Markup($"Launching with the mods below enabled: \n[grey]{enabledModsOutput}[/]\n\n[pink1]Enjoy your Celeste journey![/]\n");
+        AnsiConsole.MarkupLine($"[grey](Press any key in 10 seconds to check the whole list)[/]");
+
+        bool keyPressed = false;
+        Stopwatch sw = Stopwatch.StartNew();
+        long totalSeconds = 10, remainingSeconds = totalSeconds;
+
+        AnsiConsole.Markup($"\r{remainingSeconds:D2}");
+
+        while (sw.ElapsedMilliseconds < totalSeconds * 1000)
+        {
+            long nowRemainingSecond = totalSeconds - sw.ElapsedMilliseconds / 1000;
+            if (nowRemainingSecond != remainingSeconds)
+            {
+                remainingSeconds = nowRemainingSecond;
+                AnsiConsole.Markup($"\r{remainingSeconds:D2}");
+            }
+            if (Console.KeyAvailable)
+            {
+                Console.ReadKey(true);
+                keyPressed = true;
+                break;
+            }
+            Thread.Sleep(50);
+        }
+
+        if (keyPressed)
+        {
+            AnsiConsole.Markup("\nTimer stopped. You can now check the whole list. [grey](Press ENTER to quit)[/]");
+            Console.ReadKey(true);
+        }
+        return null;
+    }
+}
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace Parnassus.Launcher;
+
+public class ModsList
+{
+    private List<string>? content;
+
+    public ModsList(List<string>? _content = null)
+    {
+        this.content = _content;
+    }
+
+    public List<string>? Content
+    { 
+        get => (content == null ? null : new(content));
+    }
+
+    public override string ToString()
+    {
+        if (content == null || content.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        return string.Join(Environment.NewLine, content);
+    }
+}
+﻿using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace Parnassus.Launcher;
+
+public class ModsListManager
+{
+    private readonly string modsListDir;
+    private readonly string modsDir;
+    private ModsList modsList;
+
+    public ModsListManager(string _modsListDir, string _modsDir)
+    {
+        modsListDir = _modsListDir;
+        modsDir = _modsDir;
+        modsList = new ModsList();
+    }
+
+    public ModsList ModsList { get { return modsList; } }
+
+    public void LoadModsList()
+    {
+        modsList = new ModsList(File.ReadLines(modsListDir)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .ToList());
+    }
+
+    public void ScanMods()
+    {
+        modsList = new ModsList(Directory.GetFiles(modsDir, "*.zip", SearchOption.TopDirectoryOnly)
+            .Select(x => Path.GetFileName(x))
+            .ToList());
+    }
+
+    public void WriteToDisk()
+    {
+        File.WriteAllText(modsListDir, modsList.ToString());
+    }
+}
+﻿using Parnassus.Launcher;
+using Spectre.Console;
+
+if (args.Length <= 0)
+{
+    Console.WriteLine("No launch argument found.");
+    return;
+}
+
+LaunchManager launcher = new(args[0],
+    "./Parnassus/blacklists",
+    "./Parnassus/modsList.txt",
+    "./Mods",
+    "./Mods/blacklist.txt",
+    "./Parnassus/config.json");
+
+string? errorMessage = launcher.Launch();
+if (errorMessage != null)
+{
+    AnsiConsole.WriteLine($"[red]{errorMessage}[/]");
+}﻿using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace Parnassus.Launcher;
+
+public class SyncManager
+{
+    private readonly string configDir;
+    private readonly string actualBlacklistDir;
+    private readonly string blacklistsDir;
+
+    public SyncManager(string _configDir, string _actualBlacklistDir, string _blacklistsDir)
+    {
+        configDir = _configDir;
+        actualBlacklistDir = _actualBlacklistDir;
+        blacklistsDir = _blacklistsDir;
+    }
+
+    public void Record(string profileName)
+    {
+        var data = new LastLaunchConfig
+        {
+            LastProfile = profileName
+        };
+        string json = JsonSerializer.Serialize(data, AppJsonContext.Default.LastLaunchConfig);
+        File.WriteAllText(configDir, json);
+    }
+
+    public int SyncLatestLaunchedBlacklist()
+    {
+        if (!File.Exists(configDir))
+        {
+            File.WriteAllText(configDir, "{}");
+        }
+
+        try
+        {
+            var json = File.ReadAllText(configDir);
+            var config = JsonSerializer.Deserialize(json, AppJsonContext.Default.LastLaunchConfig);
+            string? lastProfile = config?.LastProfile;
+
+            if (string.IsNullOrEmpty(lastProfile))
+            {
+                return -1;
+            }
+
+            string targetProfilePath = Path.Combine(blacklistsDir, $"{lastProfile}.txt");
+
+            File.Copy(actualBlacklistDir, targetProfilePath, true);
+            return 0;
+        }
+        catch (Exception)
+        {
+            return -1;
+        }
+    }
+
+}
+
+[JsonSerializable(typeof(LastLaunchConfig))]
+internal partial class AppJsonContext : JsonSerializerContext
+{
+}
+
+public class LastLaunchConfig
+{
+    public string? LastProfile { get; set; }
+}// <autogenerated />
+using System;
+using System.Reflection;
+[assembly: global::System.Runtime.Versioning.TargetFrameworkAttribute(".NETCoreApp,Version=v10.0", FrameworkDisplayName = ".NET 10.0")]
+//------------------------------------------------------------------------------
+// <auto-generated>
+//     This code was generated by a tool.
+//     Runtime Version:4.0.30319.42000
+//
+//     Changes to this file may cause incorrect behavior and will be lost if
+//     the code is regenerated.
+// </auto-generated>
+//------------------------------------------------------------------------------
+
+using System;
+using System.Reflection;
+
+[assembly: System.Reflection.AssemblyCompanyAttribute("Parnassus.Launcher")]
+[assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
+[assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyProductAttribute("Parnassus.Launcher")]
+[assembly: System.Reflection.AssemblyTitleAttribute("Parnassus.Launcher")]
+[assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
+
+// Generated by the MSBuild WriteCodeFragment class.
+
+// <auto-generated/>
+global using System;
+global using System.Collections.Generic;
+global using System.IO;
+global using System.Linq;
+global using System.Net.Http;
+global using System.Threading;
+global using System.Threading.Tasks;
+// <autogenerated />
+using System;
+using System.Reflection;
+[assembly: global::System.Runtime.Versioning.TargetFrameworkAttribute(".NETCoreApp,Version=v10.0", FrameworkDisplayName = ".NET 10.0")]
+//------------------------------------------------------------------------------
+// <auto-generated>
+//     This code was generated by a tool.
+//     Runtime Version:4.0.30319.42000
+//
+//     Changes to this file may cause incorrect behavior and will be lost if
+//     the code is regenerated.
+// </auto-generated>
+//------------------------------------------------------------------------------
+
+using System;
+using System.Reflection;
+
+[assembly: System.Reflection.AssemblyCompanyAttribute("Parnassus.Launcher")]
+[assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
+[assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyProductAttribute("Parnassus.Launcher")]
+[assembly: System.Reflection.AssemblyTitleAttribute("Parnassus.Launcher")]
+[assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
+
+// Generated by the MSBuild WriteCodeFragment class.
+
+// <auto-generated/>
+global using System;
+global using System.Collections.Generic;
+global using System.IO;
+global using System.Linq;
+global using System.Net.Http;
+global using System.Threading;
+global using System.Threading.Tasks;
+// <autogenerated />
+using System;
+using System.Reflection;
+[assembly: global::System.Runtime.Versioning.TargetFrameworkAttribute(".NETCoreApp,Version=v10.0", FrameworkDisplayName = ".NET 10.0")]
+//------------------------------------------------------------------------------
+// <auto-generated>
+//     This code was generated by a tool.
+//     Runtime Version:4.0.30319.42000
+//
+//     Changes to this file may cause incorrect behavior and will be lost if
+//     the code is regenerated.
+// </auto-generated>
+//------------------------------------------------------------------------------
+
+using System;
+using System.Reflection;
+
+[assembly: System.Reflection.AssemblyCompanyAttribute("Parnassus.Launcher")]
+[assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
+[assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyProductAttribute("Parnassus.Launcher")]
+[assembly: System.Reflection.AssemblyTitleAttribute("Parnassus.Launcher")]
+[assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
+
+// Generated by the MSBuild WriteCodeFragment class.
+
+// <auto-generated/>
+global using System;
+global using System.Collections.Generic;
+global using System.IO;
+global using System.Linq;
+global using System.Net.Http;
+global using System.Threading;
+global using System.Threading.Tasks;
+// <autogenerated />
+using System;
+using System.Reflection;
+[assembly: global::System.Runtime.Versioning.TargetFrameworkAttribute(".NETCoreApp,Version=v10.0", FrameworkDisplayName = ".NET 10.0")]
+//------------------------------------------------------------------------------
+// <auto-generated>
+//     This code was generated by a tool.
+//     Runtime Version:4.0.30319.42000
+//
+//     Changes to this file may cause incorrect behavior and will be lost if
+//     the code is regenerated.
+// </auto-generated>
+//------------------------------------------------------------------------------
+
+using System;
+using System.Reflection;
+
+[assembly: System.Reflection.AssemblyCompanyAttribute("Parnassus.Launcher")]
+[assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
+[assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyProductAttribute("Parnassus.Launcher")]
+[assembly: System.Reflection.AssemblyTitleAttribute("Parnassus.Launcher")]
+[assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
+
+// Generated by the MSBuild WriteCodeFragment class.
+
+// <auto-generated/>
+global using System;
+global using System.Collections.Generic;
+global using System.IO;
+global using System.Linq;
+global using System.Net.Http;
+global using System.Threading;
+global using System.Threading.Tasks;
+// <autogenerated />
+using System;
+using System.Reflection;
+[assembly: global::System.Runtime.Versioning.TargetFrameworkAttribute(".NETCoreApp,Version=v10.0", FrameworkDisplayName = ".NET 10.0")]
+//------------------------------------------------------------------------------
+// <auto-generated>
+//     This code was generated by a tool.
+//     Runtime Version:4.0.30319.42000
+//
+//     Changes to this file may cause incorrect behavior and will be lost if
+//     the code is regenerated.
+// </auto-generated>
+//------------------------------------------------------------------------------
+
+using System;
+using System.Reflection;
+
+[assembly: System.Reflection.AssemblyCompanyAttribute("Parnassus.Launcher")]
+[assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
+[assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyProductAttribute("Parnassus.Launcher")]
+[assembly: System.Reflection.AssemblyTitleAttribute("Parnassus.Launcher")]
+[assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
+
+// Generated by the MSBuild WriteCodeFragment class.
+
+// <auto-generated/>
+global using System;
+global using System.Collections.Generic;
+global using System.IO;
+global using System.Linq;
+global using System.Net.Http;
+global using System.Threading;
+global using System.Threading.Tasks;
