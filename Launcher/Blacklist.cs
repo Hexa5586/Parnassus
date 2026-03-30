@@ -55,4 +55,16 @@ public class Blacklist
         return body;
     }
 
+    public void Order(bool _ascending = true)
+    {
+        if (_ascending)
+        {
+            content = content?.OrderBy(item => item.Key).ToDictionary(item => item.Key, item => item.Value);
+        }
+        else
+        {
+            content = content?.OrderByDescending(item => item.Key).ToDictionary(item => item.Key, item => item.Value);
+        }
+    }
+
 }

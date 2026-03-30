@@ -18,6 +18,12 @@ public class BlacklistManager
         blacklists = new Dictionary<string, Blacklist?>();
     }
 
+    public BlacklistManager(BlacklistManager _manager)
+    {
+        blacklistsDir = _manager.blacklistsDir;
+        blacklists = new Dictionary<string, Blacklist?>(_manager.blacklists);
+    }
+
     public Dictionary<string, Blacklist?> Blacklists
     {
         get => new Dictionary<string, Blacklist?>(blacklists);
@@ -146,7 +152,7 @@ public class BlacklistManager
 
             var keysHashSet = content.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
             var newItems = modsHashSet.Where(x => !keysHashSet.Contains(x))
-                .ToDictionary(key => key, _ => false);
+                .ToDictionary(key => key, key => (key == "__all__" ? false : true));
             if (newItems.Count == 0)
             {
                 continue;
@@ -163,48 +169,82 @@ public class BlacklistManager
     /// </summary>
     /// <param name="_content">The content of the blacklist</param>
     /// <param name="_name">The name for the new blacklist</param>
-    /// /// <param name="_templateName">The name of the template</param>
+    /// <param name="_forceOverwrite">Whether to overwrite the existing blacklist with the same name. Default is false.</param>
     /// <returns>
-    /// -3: Creation failed: template is null;
-    /// -2: Creation failed: template not found, or use itself as template;
-    /// -1: Creation failed: content is null or the blacklist with the given name already exists;
+    /// -2: Creation failed: a blacklist with the given name already exists;
+    /// -1: Creation failed: content is null;
     /// 0: Creation success.
     /// </returns>
-    public int CreateBlacklist(Dictionary<string, bool>? _content, string _name, string? _templateName = null)
+    public int CreateBlacklist(Dictionary<string, bool>? _content, string _name, bool _forceOverwrite = false)
     {
         if (_content == null)
         {
             return -1;
         }
-        if (blacklists.ContainsKey(_name))
+        if (!_forceOverwrite && blacklists.ContainsKey(_name))
+        {
+            return -2;
+        }
+
+        Dictionary<string, bool> result = new(_content);
+        blacklists[_name] = new Blacklist(result, _name);
+        return 0;
+    }
+
+    /// <summary>
+    /// Applies the content of a template blacklist to an existing blacklist, merging their entries by key. 
+    /// </summary>
+    /// <param name="_name">The name of the target blacklist to which the template will be applied.</param>
+    /// <param name="_templateName">The name of the template blacklist whose content will be merged into the target blacklist. Must refer to a
+    /// different, existing blacklist.</param>
+    /// <returns>
+    /// -4: the target and template names are the same;
+    /// -3: the template blacklist does not exist;
+    /// -2: The target blacklist does not exist;
+    /// -1: Either blacklist has null content;
+    /// 0: Template application success;
+    /// </returns>
+
+    public int ApplyTemplate(string _name, string _templateName)
+    {
+        if (!blacklists.ContainsKey(_name))
+        {
+            return -2;
+        }
+
+        if (!blacklists.ContainsKey(_templateName))
+        {
+            return -3;
+        }
+
+        if (_name == _templateName)
+        {
+            return -4;
+        }
+
+        var targetBlacklist = blacklists[_name];
+        var template = blacklists[_templateName];
+
+        if (template?.Content == null || targetBlacklist?.Content == null)
         {
             return -1;
         }
 
-        Dictionary<string, bool> result;
+        var result = new Dictionary<string, bool>(targetBlacklist.Content);
 
-        if (_templateName != null)
+        foreach (var kvp in template.Content)
         {
-            if (!blacklists.ContainsKey(_templateName) || _name == _templateName)
-            {
-                return -2;
-            }
+            string modName = kvp.Key;
+            bool isTemplateDisabled = kvp.Value;
 
-            var templateContent = blacklists[_templateName]?.Content;
-            if (templateContent == null)
+            if (isTemplateDisabled == false)
             {
-                return -3;
+                result[modName] = false;
             }
-            result = templateContent
-                .UnionBy(_content, x => x.Key)
-                .ToDictionary(x => x.Key, x => x.Value);
         }
-        else
-        {
-            result = new(_content);
-        }
-        
+
         blacklists[_name] = new Blacklist(result, _name);
+
         return 0;
     }
 
@@ -214,15 +254,21 @@ public class BlacklistManager
     /// </summary>
     /// <param name="_name">The name of the blacklist to delete</param>
     /// <returns>
-    /// -1: Deletion failed: The target blacklist is null or the name cannot be found as a key;
+    /// -2: A blacklist with the given name does not exist;
+    /// -1: The target blacklist is null;
     /// 0: Deletion success.
     /// </returns>
     public int DeleteBlacklist(string _name)
     {
-        if (!blacklists.ContainsKey(_name) || blacklists[_name] == null)
+        if (!blacklists.ContainsKey(_name))
+        {
+            return -2;
+        }
+        if (blacklists[_name] == null)
         {
             return -1;
         }
+
         blacklists[_name] = null;
         return 0;
     }
@@ -233,20 +279,26 @@ public class BlacklistManager
     /// <param name="_name">The name of the blacklist to rename</param>
     /// <param name="_newName">The new name for the blacklist</param>
     /// <returns>
-    /// -2: Renaming failed: A blacklist with the given new name already exists;
-    /// -1: Renaming failed: The target blacklist is null or the name cannot be found as a key;
+    /// -3: A blacklist with the given new name already exists;
+    /// -2: A blacklist with the given name does not exist;
+    /// -1: The target blacklist is null;
     /// 0: Renaming success.
     /// </returns>
     public int RenameBlacklist(string _name, string _newName)
     {
-        if (!blacklists.ContainsKey(_name) || blacklists[_name] == null)
+        if (!blacklists.ContainsKey(_name))
+        {
+            return -2;
+        }
+        
+        if (blacklists[_name] == null)
         {
             return -1;
         }
 
         if (blacklists.ContainsKey(_newName))
         {
-            return -2;
+            return -3;
         }
 
         blacklists[_newName] = new Blacklist(blacklists[_name]);
@@ -276,6 +328,8 @@ public class BlacklistManager
                 blacklists.Remove(key);
                 continue;
             }
+
+            item.Order(_ascending: true);
             File.WriteAllText(filename, item.ToString());
         }
     }
